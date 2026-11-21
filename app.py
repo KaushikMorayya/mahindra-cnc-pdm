@@ -31,13 +31,12 @@ def init_db():
             status TEXT
         )
     """)
-  # Auto-seed realistic Sat/Sun tickets if container restarted after inactivity
   c.execute("SELECT COUNT(*) FROM tickets")
   if c.fetchone()[0] == 0:
     seed_data = [
         (
             "2026-11-18 14:20",
-            "CNC #2 (Boring - Live)",
+            "CNC #2 (Boring)",
             64.5,
             "Mechanical Team",
             "Mechanical (Tool/Overstrain/Heat)",
@@ -130,15 +129,12 @@ def load_and_train():
     })
     data_source = "Offline AI4I-Schema CNC Telemetry (10,000 Rows)"
 
-  # Map UCI failure modes to Core Teams:
-  # 0 = Healthy | 1 = Mechanical (TWF/OSF/HDF) | 2 = Electrical (PWF - Power/Motor)
   fault_class = np.zeros(len(df), dtype=int)
   mech_mask = (df["TWF"] == 1) | (df["OSF"] == 1) | (df["HDF"] == 1)
   elec_mask = (df["PWF"] == 1) & (~mech_mask)
   fault_class[mech_mask] = 1
   fault_class[elec_mask] = 2
 
-  # Derive Remaining Useful Life (RUL in hours) from wear, torque overstrain, and thermal delta
   temp_delta = df["Process temperature [K]"] - df["Air temperature [K]"]
   power_watts = (
       df["Torque [Nm]"] * df["Rotational speed [rpm]"] * (2 * np.pi / 60)
@@ -198,7 +194,6 @@ with col_clock:
 hours_to_friday = current_day[1]
 
 # ---------------------------------------------------------
-# ---------------------------------------------------------
 # 4. LIVE MULTI-MACHINE PLC & SENSOR FEED (ALL 4 CNCs)
 # ---------------------------------------------------------
 if "machine_states" not in st.session_state:
@@ -211,20 +206,53 @@ if "machine_states" not in st.session_state:
 
 st.sidebar.header("🎛️ Live Shop-Floor Sensor Feed")
 selected_cnc = st.sidebar.selectbox(
-    "Select Machine to Inject Telemetry:",
+    "Select Machine to Inspect & Tune:",
     list(st.session_state.machine_states.keys()),
+    index=1,
 )
 curr_vals = st.session_state.machine_states[selected_cnc]
 
-air_t = st.sidebar.slider("Air Temp (K)", 295.0, 305.0, float(curr_vals[0]), 0.1)
+# Unique keys per machine ensure sliders visually reset to each machine's exact values
+air_t = st.sidebar.slider(
+    "Air Temp (K)",
+    295.0,
+    305.0,
+    float(curr_vals[0]),
+    0.1,
+    key=f"air_{selected_cnc}",
+)
 proc_t = st.sidebar.slider(
-    "Process Temp (K)", 305.0, 315.0, float(curr_vals[1]), 0.1
+    "Process Temp (K)",
+    305.0,
+    315.0,
+    float(curr_vals[1]),
+    0.1,
+    key=f"proc_{selected_cnc}",
 )
-rpm = st.sidebar.slider("Spindle Speed (RPM)", 1150, 2800, int(curr_vals[2]), 10)
+rpm = st.sidebar.slider(
+    "Spindle Speed (RPM)",
+    1150,
+    2800,
+    int(curr_vals[2]),
+    10,
+    key=f"rpm_{selected_cnc}",
+)
 torque = st.sidebar.slider(
-    "Cutting Torque (Nm)", 15.0, 75.0, float(curr_vals[3]), 0.5
+    "Cutting Torque (Nm)",
+    15.0,
+    75.0,
+    float(curr_vals[3]),
+    0.5,
+    key=f"trq_{selected_cnc}",
 )
-wear = st.sidebar.slider("Tool Wear (mins)", 0, 250, int(curr_vals[4]), 5)
+wear = st.sidebar.slider(
+    "Tool Wear (mins)",
+    0,
+    250,
+    int(curr_vals[4]),
+    5,
+    key=f"wear_{selected_cnc}",
+)
 
 st.session_state.machine_states[selected_cnc] = [
     air_t,
@@ -267,24 +295,25 @@ for idx, (m_name, vals) in enumerate(machines.items()):
           else "Mechanical Team (Preventive)"
       )
   )
+  active_badge = " *(Selected)*" if m_name == selected_cnc else ""
 
   with cols[idx]:
     if pred_rul <= 5:
-      st.error(f"### {m_name}\n**🔴 CRITICAL TRIP**")
+      st.error(f"### {m_name}{active_badge}\n**🔴 CRITICAL TRIP**")
       decision = "Black-Box Lock + Buffer Bypass Active"
       window = "IMMEDIATE EMERGENCY"
-      line_avail = 84.0
+      line_avail = min(line_avail, 84.0)
     elif pred_rul < hours_to_friday:
-      st.warning(f"### {m_name}\n**🟠 MID-WEEK RISK**")
+      st.warning(f"### {m_name}{active_badge}\n**🟠 MID-WEEK RISK**")
       decision = "Throttle Feed 10% to Survive Till Fri"
       window = "SHIFT CHANGE / THROTTLE"
       line_avail = min(line_avail, 97.0)
     elif pred_rul < (hours_to_friday + 48):
-      st.info(f"### {m_name}\n**🟡 BOOK SAT/SUN**")
+      st.info(f"### {m_name}{active_badge}\n**🟡 BOOK SAT/SUN**")
       decision = f"Schedule Sat 09:00 AM ({team})"
       window = "SATURDAY 09:00 AM (OFF)"
     else:
-      st.success(f"### {m_name}\n**🟢 HEALTHY**")
+      st.success(f"### {m_name}{active_badge}\n**🟢 HEALTHY**")
       decision = "Run 24/5 Continuous"
       window = None
 
@@ -308,7 +337,7 @@ col_kpi3.metric(
 )
 
 # ---------------------------------------------------------
-# 5. PERSISTENT SQLITE WORK-ORDER QUEUE & TELEMETRY CHART
+# 5. PERSISTENT SQLITE WORK-ORDER QUEUE & DYNAMIC MACHINE CHART
 # ---------------------------------------------------------
 st.divider()
 left_col, right_col = st.columns([3, 2])
@@ -332,27 +361,33 @@ with left_col:
     )
 
 with right_col:
-  st.subheader("3. CNC #2 Torque & Tool Wear Degradation")
+  # Dynamically reflects whichever machine is currently selected in the sidebar dropdown
+  st.subheader(f"3. {selected_cnc} — Live Telemetry & Power")
   power_kw = round((torque * rpm * (2 * np.pi / 60)) / 1000, 2)
-  st.metric(
-      "Calculated Spindle Power Draw",
-      f"{power_kw} kW",
-      "Safe Range: 3.5 – 8.5 kW",
+  c_m1, c_m2 = st.columns(2)
+  c_m1.metric(
+      "Spindle Power Draw", f"{power_kw} kW", "Safe Range: 3.5 – 8.5 kW"
   )
+  c_m2.metric("Current Tool Wear", f"{wear} min", f"Torque: {torque} Nm")
+
   hrs = np.arange(-24, 1)
-  torque_hist = np.linspace(36.0, torque, len(hrs)) + np.random.normal(
-      0, 0.8, len(hrs)
+  np.random.seed(int(rpm + torque))
+  torque_hist = np.linspace(34.0, torque, len(hrs)) + np.random.normal(
+      0, 0.7, len(hrs)
   )
   fig = go.Figure()
   fig.add_trace(
       go.Scatter(
-          x=hrs, y=torque_hist, mode="lines+markers", name="Torque (Nm)"
+          x=hrs,
+          y=torque_hist,
+          mode="lines+markers",
+          name=f"{selected_cnc} Torque (Nm)",
       )
   )
   fig.update_layout(
       height=260,
       xaxis_title="Hours Relative to Now",
-      yaxis_title="Torque (Nm)",
+      yaxis_title="Cutting Torque (Nm)",
       margin=dict(l=10, r=10, t=10, b=10),
   )
   st.plotly_chart(fig, use_container_width=True)
