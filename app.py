@@ -198,21 +198,42 @@ with col_clock:
 hours_to_friday = current_day[1]
 
 # ---------------------------------------------------------
-# 4. LIVE CNC #2 TELEMETRY CONTROLS (REAL UCI UNITS)
 # ---------------------------------------------------------
-st.sidebar.header("🎛️ CNC #2 Live PLC & Sensor Feed")
-air_t = st.sidebar.slider("Air Temp (K)", 295.0, 305.0, 300.5, 0.1)
-proc_t = st.sidebar.slider("Process Temp (K)", 305.0, 315.0, 310.2, 0.1)
-rpm = st.sidebar.slider("Spindle Speed (RPM)", 1150, 2800, 1420, 10)
-torque = st.sidebar.slider("Cutting Torque (Nm)", 15.0, 75.0, 52.0, 0.5)
-wear = st.sidebar.slider("Tool Wear (mins)", 0, 250, 165, 5)
+# 4. LIVE MULTI-MACHINE PLC & SENSOR FEED (ALL 4 CNCs)
+# ---------------------------------------------------------
+if "machine_states" not in st.session_state:
+  st.session_state.machine_states = {
+      "CNC #1 (Roughing)": [298.5, 309.0, 1550, 36.0, 40],
+      "CNC #2 (Boring)": [300.5, 310.2, 1420, 52.0, 165],
+      "CNC #3 (Drilling)": [299.0, 309.5, 1620, 38.0, 55],
+      "CNC #4 (Finishing)": [298.2, 308.8, 1750, 32.0, 25],
+  }
 
-machines = {
-    "CNC #1 (Roughing)": [298.5, 309.0, 1550, 36.0, 40],
-    "CNC #2 (Boring - Live)": [air_t, proc_t, rpm, torque, wear],
-    "CNC #3 (Drilling)": [299.0, 309.5, 1620, 38.0, 55],
-    "CNC #4 (Finishing)": [298.2, 308.8, 1750, 32.0, 25],
-}
+st.sidebar.header("🎛️ Live Shop-Floor Sensor Feed")
+selected_cnc = st.sidebar.selectbox(
+    "Select Machine to Inject Telemetry:",
+    list(st.session_state.machine_states.keys()),
+)
+curr_vals = st.session_state.machine_states[selected_cnc]
+
+air_t = st.sidebar.slider("Air Temp (K)", 295.0, 305.0, float(curr_vals[0]), 0.1)
+proc_t = st.sidebar.slider(
+    "Process Temp (K)", 305.0, 315.0, float(curr_vals[1]), 0.1
+)
+rpm = st.sidebar.slider("Spindle Speed (RPM)", 1150, 2800, int(curr_vals[2]), 10)
+torque = st.sidebar.slider(
+    "Cutting Torque (Nm)", 15.0, 75.0, float(curr_vals[3]), 0.5
+)
+wear = st.sidebar.slider("Tool Wear (mins)", 0, 250, int(curr_vals[4]), 5)
+
+st.session_state.machine_states[selected_cnc] = [
+    air_t,
+    proc_t,
+    rpm,
+    torque,
+    wear,
+]
+machines = st.session_state.machine_states
 
 fault_map = {
     0: "Nominal (No Fault)",
