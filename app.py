@@ -391,3 +391,12 @@ with right_col:
       margin=dict(l=10, r=10, t=10, b=10),
   )
   st.plotly_chart(fig, use_container_width=True)
+
+with st.expander("📊 Inspect Raw UCI AI4I 2020 Training Dataset (10,000 Rows)"):
+  st.dataframe(raw_df.head(50), use_container_width=True)
+  st.download_button(
+      "Download Full 10,000-Row CSV",
+      raw_df.to_csv(index=False),
+      "ai4i2020.csv",
+      "text/csv",
+  )
